@@ -1,0 +1,609 @@
+load "ff-Ipopt";
+load "ffrandom";
+load "iovtk";
+load "msh3";
+verbosity = 0;
+
+int[int] ffordervel = [1];
+
+int ii = 0;
+int jj = 0;
+int n = 30;
+int filterGrad = 1;
+mesh Th = square(n, n, [10*x, 10*y], flags = 2);
+int activateLagrange = 1;
+
+// for vertConstraint
+macro grad(u)        ( [dx(u),dy(u)] )              // eom
+macro normgrad(u)    ( sqrt( dx(u)*dx(u) + dy(u)*dy(u)  + epsgrad)) // eom
+macro HS(u)			     ( 1/(1+exp(-2*betaOVH*(u))) ) 		// eom
+macro dHS(u)		     ( 2 * betaOVH * exp(-2*betaOVH*(u)) / ((1+exp(-2*betaOVH*(u)))^2)	)	// eom
+macro HSalpha(u)  ( HS( abs(u) - cos(alpha) ) )  // eom
+macro dHSalpha(u) ( dHS( abs(u) - cos(alpha) ) ) // eom
+macro sgn(u) ((u) < 0 ? -1 : ((u) > 0 ? 1 : 0)) // eom
+
+border a(t = 0, 10){x = t ; y = 0 ; label = 1;};
+border b(t = 0, 10){x = 10; y = t ; label = 2;};
+border c(t = 10, 0){x = t ; y = 10; label = 3;};
+border d(t = 10, 0){x = 0 ; y = t ; label = 4;};
+// the boundary condition ensure periodicity
+
+// functional spaces
+fespace Vh1 (Th, P1);
+fespace Vhp(Th, P1,       periodic = [[2,y],[4,y],[1,x],[3,x]]);
+fespace Xh (Th,[P1, P1]);
+fespace Xhp(Th,[P1, P1],  periodic = [[2,y],[4,y],[1,x],[3,x]]);
+
+fespace Xh0(Th, P0);
+Xh0 vol = area;
+
+Vhp v, vtrial, vH, psi, lz, uz;
+Vh1 m11, m12, m22;
+
+// for vertConstraint
+real angledeg = 30; //45.;
+real alpha = angledeg*2*pi/360.;
+real epsgrad = 1e-12;
+real betaOVH = 10.;
+real bx = 1.0;
+real by = 0.0;
+
+// initialization of the Density Field
+srandom(10);
+for(int ii = 0; ii < Vhp.ndof; ii++)
+	v[][ii] = random()/3e9;
+
+plot(v, fill = 1, wait = 1);
+
+// variables definition
+Xhp [u1star11,u2star11], [u1star22,u2star22], [u1star12,u2star12], [v1,v2], [z1,z2];
+Xhp [l1star11,l2star11], [l1star22,l2star22], [l1star12,l2star12];
+
+// trial displacements
+Xh [u1011,u2011] = [x, 0];
+Xh [u1022,u2022] = [0, y];
+Xh [u1012,u2012] = [y, 0];
+
+real [int] lm = [0,0,0,0];
+
+// auxiliary variables
+real q = 4.;
+real r = 4.;
+real s = 4.;
+real radiusder = 10./50^2;
+real radius    =  0.02;
+real Omega = int2d(Th)(1.);
+real weigth = 0.;
+
+// coefficients
+real E  = 70.0;
+real nu = 0.33;
+real L = E*nu/((1.+nu)*(1.-2.*nu));
+real M = E/(2.*(1.+nu));
+
+real Volume = int2d(Th)(1.);
+
+// targets
+real  E1111, E2222, E1122, E2211, E1212, E1112, E2212, E1212target, E1111target, E2222target, a1, a2;
+real  E1111F, E2222F, E1122F, E2211F, E1212F, E1112F, E2212F;
+
+a1 = 0.5;
+a2 = 0.5;
+
+macro div(u,v)       ( dx(u)+ dy(v))                                                                          // eom
+macro epsilon(u,v)   [ dx(u), dy(v), 0.5*(dx(v) + dy(u)), 0.5*(dx(v) + dy(u)) ]                               // eom
+macro sigma  (u,v)   [ 2*M*dx(u) + L*div(u,v), 2*M*dy(v) + L*div(u,v), M*(dx(v) + dy(u)),  M*(dx(v) + dy(u))] // eom
+
+// Helmholtz filter
+problem helmholtz(vH, psi) = int2d(Th)( radius*(dx(vH)*dx(psi) + dy(vH)*dy(psi)) )
+                           + int2d(Th)( vH*psi )
+                           - int2d(Th)( v *psi );
+
+// auxiliary function to determine full-material properties
+// computing the homogenized elasticty tensor
+func real JF(real[int] & v) 
+{
+  Vhp w;
+  w = 1;
+
+  cout << "Solving primal problems..." << endl;
+
+  solve micro11primal([u1star11, u2star11], [v1, v2]) = 
+	int2d(Th)(w^q*sigma(u1star11,u2star11)'*epsilon(v1,v2))
+  - int2d(Th)(w^r*sigma(u1011,u2011)'*epsilon(v1,v2));
+
+  solve micro22primal([u1star22, u2star22], [v1, v2]) =
+	int2d(Th)(w^q*sigma(u1star22,u2star22)'*epsilon(v1,v2))
+  - int2d(Th)(w^r*sigma(u1022,u2022)'*epsilon(v1,v2));
+
+  solve micro12primal([u1star12, u2star12], [v1, v2]) =
+	int2d(Th)(w^q*sigma(u1star12,u2star12)'*epsilon(v1,v2))
+  - int2d(Th)(w^r*sigma(u1012,u2012)'*epsilon(v1,v2));
+
+  E1111F = int2d(Th)(w^s*(sigma(u1011,u2011)-sigma(u1star11,u2star11))'*(epsilon(u1011,u2011)-epsilon(u1star11,u2star11)))/Omega;
+  E1122F = int2d(Th)(w^s*(sigma(u1011,u2011)-sigma(u1star11,u2star11))'*(epsilon(u1022,u2022)-epsilon(u1star22,u2star22)))/Omega;
+  E2211F = int2d(Th)(w^s*(sigma(u1022,u2022)-sigma(u1star22,u2star22))'*(epsilon(u1011,u2011)-epsilon(u1star11,u2star11)))/Omega;
+  E2222F = int2d(Th)(w^s*(sigma(u1022,u2022)-sigma(u1star22,u2star22))'*(epsilon(u1022,u2022)-epsilon(u1star22,u2star22)))/Omega;
+  E1212F = int2d(Th)(w^s*(sigma(u1012,u2012)-sigma(u1star12,u2star12))'*(epsilon(u1012,u2012)-epsilon(u1star12,u2star12)))/Omega;
+  
+  E1112F = int2d(Th)(w^s*(sigma(u1012,u2012)-sigma(u1star12,u2star12))'*(epsilon(u1011,u2011)-epsilon(u1star11,u2star11)))/Omega;
+  E2212F = int2d(Th)(w^s*(sigma(u1012,u2012)-sigma(u1star12,u2star12))'*(epsilon(u1022,u2022)-epsilon(u1star22,u2star22)))/Omega;
+
+  cout.fixed << "Matrix CH-full" << endl;
+  cout.fixed << " " << endl;
+  cout.fixed << "             [ " << E1111F << "   " << E1122F << "  " << E1112F << " ]" << endl;
+  cout.fixed << "             [ " << E2211F << "   " << E2222F << "  " << E2212F << " ]" << endl;
+  cout.fixed << "             [ " << E1112F << "   " << E2212F << "  " << E1212F << " ]" << endl;
+
+  return 1;
+}
+						  
+// objective function: microscopic foreshortening
+func real J(real[int] & v) 
+{
+  Vhp w;
+  w[] = v;
+  plot(w, fill = 1, value = 1, cmm = "j = "+jj+" ii = "+ii);
+
+  cout << "Solving primal problems..." << endl;
+
+  solve micro11primal([u1star11, u2star11], [v1, v2]) = 
+	int2d(Th)(w^q*sigma(u1star11,u2star11)'*epsilon(v1,v2))
+  - int2d(Th)(w^r*sigma(u1011,u2011)'*epsilon(v1,v2));
+
+  solve micro22primal([u1star22, u2star22], [v1, v2]) =
+	int2d(Th)(w^q*sigma(u1star22,u2star22)'*epsilon(v1,v2))
+  - int2d(Th)(w^r*sigma(u1022,u2022)'*epsilon(v1,v2));
+
+  solve micro12primal([u1star12, u2star12], [v1, v2]) =
+	int2d(Th)(w^q*sigma(u1star12,u2star12)'*epsilon(v1,v2))
+  - int2d(Th)(w^r*sigma(u1012,u2012)'*epsilon(v1,v2));
+
+  E1111 = int2d(Th)(w^s*(sigma(u1011,u2011)-sigma(u1star11,u2star11))'*(epsilon(u1011,u2011)-epsilon(u1star11,u2star11)))/Omega;
+  E1122 = int2d(Th)(w^s*(sigma(u1011,u2011)-sigma(u1star11,u2star11))'*(epsilon(u1022,u2022)-epsilon(u1star22,u2star22)))/Omega;
+  E2211 = int2d(Th)(w^s*(sigma(u1022,u2022)-sigma(u1star22,u2star22))'*(epsilon(u1011,u2011)-epsilon(u1star11,u2star11)))/Omega;
+  E2222 = int2d(Th)(w^s*(sigma(u1022,u2022)-sigma(u1star22,u2star22))'*(epsilon(u1022,u2022)-epsilon(u1star22,u2star22)))/Omega;
+  E1212 = int2d(Th)(w^s*(sigma(u1012,u2012)-sigma(u1star12,u2star12))'*(epsilon(u1012,u2012)-epsilon(u1star12,u2star12)))/Omega;
+  
+  E1112 = int2d(Th)(w^s*(sigma(u1012,u2012)-sigma(u1star12,u2star12))'*(epsilon(u1011,u2011)-epsilon(u1star11,u2star11)))/Omega;
+  E2212 = int2d(Th)(w^s*(sigma(u1012,u2012)-sigma(u1star12,u2star12))'*(epsilon(u1022,u2022)-epsilon(u1star22,u2star22)))/Omega;
+
+  cout << "*********************************************" << endl;
+  cout << "j = " << jj << endl;
+
+  cout.fixed << "Matrix CH" << endl;
+  cout.fixed << " " << endl;
+  cout.fixed << "             [ " << E1111 << "   " << E1122 << "  " << E1112        << " ]" << endl;
+  cout.fixed << "             [ " << E2211 << "   " << E2222 << "  " << E2212        << " ]" << endl;
+  cout.fixed << "             [ " << E1112        << "   " << E2212        << "  " << E1212 << " ]" << endl;
+
+  jj = jj + 1;
+
+  real penalization = int2d(Th)(dx(w)*dx(w) + dy(w)*dy(w));
+
+  real eps = 1e-12;
+	real safeE1111;
+	safeE1111 = E1111+eps;
+  return 0.5*(E1122/safeE1111)^2.;
+}
+
+// foreshortening
+func real foreshortening(real[int] & v)
+{
+  real eps = 1e-12;
+  real safeE1111;
+  safeE1111 = E1111+eps;
+  real fraction1 = E1122/safeE1111;
+
+  return fraction1;
+}
+
+func real[int] dforeshortening(real[int] & v)
+{
+  Vhp wHH;
+  wHH[] = v;
+
+  real eps = 1e-12;
+  real safeE1111;
+  safeE1111 = E1111+eps;
+
+
+  Xhp [l1star11f,l2star11f], [l1star22f,l2star22f];
+
+  if(activateLagrange == 1){
+	cout << "Solving dual problems..." << endl;
+	solve micro11dualfirst([l1star11f,l2star11f],[v1,v2])=
+					 int2d(Th)(wHH^q*sigma(v1,v2)'*epsilon(l1star11f,l2star11f))
+
+					 +int2d(Th)(wHH^s*sigma(u1022,u2022)'*epsilon(v1,v2)/(Omega*safeE1111^2)*safeE1111)
+					 -int2d(Th)(wHH^s*sigma(u1star22,u2star22)'*epsilon(v1,v2)/(Omega*safeE1111^2)*safeE1111)
+
+					+int2d(Th)(2*wHH^s*sigma(u1011,u2011)'*epsilon(v1,v2)/(Omega*safeE1111^2)*(-E1122))
+					-int2d(Th)(2*wHH^s*sigma(u1star11,u2star11)'*epsilon(v1,v2)/(Omega*safeE1111^2)*(-E1122));
+
+	solve micro22dualfirst([l1star22f,l2star22f],[v1,v2])=
+					 int2d(Th)(wHH^q*sigma(v1,v2)'*epsilon(l1star22f,l2star22f))
+
+					 -int2d(Th)(wHH^s*sigma(u1011,u2011)'*epsilon(v1,v2)/(safeE1111*Omega))
+					 +int2d(Th)(wHH^s*sigma(u1star11,u2star11)'*epsilon(v1,v2)/(safeE1111*Omega));
+  }
+
+  varf dc1(u,psi)   =
+					// d/drho [E1122/E1111]
+					int2d(Th)
+					(
+				  s*wHH^(s-1)*psi*
+			    (   (sigma(u1011, u2011)   - sigma(u1star11, u2star11)  )'*
+              (epsilon(u1022, u2022) - epsilon(u1star22, u2star22))
+					)/(Omega*safeE1111^2)*safeE1111
+					)
+					-
+					int2d(Th)
+					(
+				  s*wHH^(s-1)*psi*
+			    (   (sigma(u1011, u2011)   - sigma(u1star11, u2star11)  )'*
+              (epsilon(u1011, u2011) - epsilon(u1star11, u2star11))
+					)/(Omega*safeE1111^2)*E1122
+					)
+
+					// d/drho [a(u11,l11) - F(l11)]
+					+
+					int2d(Th)(
+					q*wHH^(q-1)*psi*
+					(    sigma(u1star11, u2star11)'*epsilon(l1star11f, l2star11f)
+					)
+					)
+					-
+					int2d(Th)(
+					r*wHH^(r-1)*psi*
+					(    sigma(u1011, u2011)'*epsilon(l1star11f, l2star11f)
+					)
+					)
+
+					// d/drho [a(u22,l22) - F(l22)]
+
+					+
+					int2d(Th)(
+					q*wHH^(q-1)*psi*
+					(    sigma(u1star22, u2star22)'*epsilon(l1star22f, l2star22f)
+					)
+					)
+					-
+					int2d(Th)(
+					r*wHH^(r-1)*psi*
+					(    sigma(u1022, u2022)'*epsilon(l1star22f, l2star22f)
+					)
+					);
+
+  real [int] jacC1 = dc1(0,Vhp);
+
+  return jacC1;
+}
+
+func real[int] gradJ(real[int] & v)
+{
+  real [int] dJ(Vhp.ndof);
+  dJ = foreshortening(v)*dforeshortening(v);
+
+  return dJ;
+}
+
+// constraint: volume fraction
+func real C(real[int] & v) 
+{
+  Vhp w;
+  w[] = v;
+
+  real fraction = int2d(Th)(w);
+
+  cout << "VOLUME FRACTION = " << fraction/Volume << endl;
+  return fraction;
+}
+
+func real vertConstraint ( real[int] & v)
+{
+  Vhp wHH;
+  wHH[] = v;
+
+  real pp = int2d(Th)( HSalpha([bx,by]' * grad(wHH) /normgrad(wHH)) * abs([bx,by]' * grad(wHH)));
+
+  cout << "VERTICAL CONSTRAINT PERIMETER = " << pp << endl;
+  return pp;
+}
+
+// constraint on E1122
+func real  C1122 (real[int]& v)
+{
+    J(v);              
+    return E1122;
+}
+
+
+
+// constraint on E2222
+func real C2222 ( real[int] & v )
+{
+    J(v);                    
+    return E2222;
+}
+
+
+func real[int] ipC (real[int]& v)
+{
+    real[int] cc = [ C(v) , vertConstraint(v) , C2222(v) , C1122(v) ];
+    return cc;
+}
+
+
+func real[int] dVertConstr(real[int] & v)
+{
+  Vhp wHH;
+  wHH[] = v;
+
+  // projected undercut perimeter filtered
+  varf dpp1(u,uu) = int2d(Th)( (  sgn([bx,by]' * grad(wHH))* HSalpha( [bx,by]' * grad(wHH) /normgrad(wHH) ) * [bx,by]' * grad(uu) 					// Derivata del termine "[bx,by]' * grad(wHH)"
+    					   + sgn([bx,by]' * grad(wHH))* dHSalpha( [bx,by]' * grad(wHH) /normgrad(wHH) )	   					// Derivata del termine "HSalpha"
+                 * ( [bx,by]' * grad(uu)/normgrad(wHH) - [bx,by]' * grad(wHH) /(normgrad(wHH)^(3)) * grad(wHH)' * grad(uu) )		// Derivata dell'argomento di "HSalpha"
+                 * abs([bx,by]' * grad(wHH))) ); 
+
+  real [int] jacPPalpha1 = dpp1(0,Vhp);
+
+  return jacPPalpha1;
+}
+
+// Constraint gradient
+func real[int] dC(real[int] & v) 
+{
+  Vhp w;
+  w[] = v;
+
+  varf dc(u,uu)   = int2d(Th)(uu);
+
+  real [int] jacC = dc(0,Vhp);
+  return jacC; 
+}
+
+func real[int] dC1122 (real[int]& v)
+{
+    Vhp w; w[] = v;     
+    J(v);               
+
+    varf dE(u,psi) =
+        int2d(Th)(
+            (s/Omega) * w^(s-1) * psi *
+            (
+               (sigma(u1011,u2011) - sigma(u1star11,u2star11))'
+             * (epsilon(u1022,u2022) - epsilon(u1star22,u2star22))
+            )
+        );
+
+    real[int] row = dE(0, Vhp);        
+    return row;
+}
+
+// constraint gradient for E2222
+func real[int] dC2222 ( real[int] & v )
+{
+    Vhp w ;  w[] = v;
+    J(v);                                
+
+    varf dE(u,ps) =                     
+        int2d(Th)(
+            (s/Omega) * w^(s-1) * ps *
+            (
+              (sigma(u1022,u2022) - sigma(u1star22,u2star22))'
+            * (epsilon(u1022,u2022) - epsilon(u1star22,u2star22))
+            )
+        );
+
+    real[int] row = dE(0, Vhp);    
+    return row;
+}
+
+
+
+
+matrix mdC;
+
+func matrix ipGradC (real[int]& v)
+{
+    real[int,int] dc(4, Vhp.ndof);
+    dc(0,:) = dC(v);
+    dc(1,:) = dVertConstr(v);
+    dc(2,:) = dC2222(v);
+    dc(3,:) = dC1122(v);  
+    mdC = dc;
+    return mdC;
+}
+
+
+int nnz = 4 * Vhp.ndof;
+int[int] gvi(nnz), gvj(nnz);   
+
+for (int k = 0; k < Vhp.ndof; ++k)
+{
+    gvi[k]              = 0;  gvj[k]              = k;   // volume
+    gvi[k +   Vhp.ndof] = 1;  gvj[k +   Vhp.ndof] = k;   // over-hang
+    gvi[k + 2*Vhp.ndof] = 2;  gvj[k + 2*Vhp.ndof] = k;   // E2222
+    gvi[k + 3*Vhp.ndof] = 3;  gvj[k + 3*Vhp.ndof] = k;   // E1122   (new)
+}
+
+
+
+Vhp xlb = 1e-4, xub = 1;    // lower and upper bounds for v
+
+real tolv = 0.;
+real vf      = 0.25;      // volume fraction upper bound
+real pSigned = 4;      // upper bound for the vertical constraint
+
+Vhp vFull = 1;    
+JF(vFull[]);       
+
+// lower bound for E1122 and E2222
+real E1122min   = 0.0* E1122F + 1.2;
+real E2222min = 0.0* E2222F + 1.5; 
+
+real[int] clb = [ 0*vf*Volume , 0       ,  E2222min ,  E1122min ];
+real[int] cub = [ vf*Volume   , pSigned ,  1e20     ,  1e20     ];
+
+real tolmesh = 1e-6; //1e-6
+real stopmesh = tolmesh + 1.;
+int ntold = Th.nt;
+int maxit = 10;
+
+// initial density field
+v = abs(sin(2*pi*x/5)*sin(2*pi*y/5));   
+
+
+vtrial = 1;
+JF(vtrial[]);
+
+exec("mkdir -p results"); // create 'results' folder if not existing
+
+real tau = .001;
+real maxsK;
+include "makemetrica.edp";
+
+while(stopmesh > tolmesh && ii < maxit){
+	
+	jj = 0;
+
+	if(ii <= 8){
+	IPOPT(J, gradJ, ipC, ipGradC, v[],
+	  lb  = xlb[], ub  = xub[],
+   	  clb = clb  , cub = cub  ,
+	  checkindex = 1, structjacc = [gvi,gvj],
+      maxiter = 250*(ii<=2) + 600*(ii>2), warmstart = ii,
+	  lm = lm, uz = uz[], lz = lz[], 
+	  tol=1e-6);
+	}
+
+	if(ii >= 6){
+		savemesh(Th, "mesh_conv_"+vf+".mesh");
+
+	{
+		ofstream file("density_conv_"+vf+".txt");
+		for(int i = 0; i < Vhp.ndof; i++){
+			file << v[][i] << endl;
+		}
+	}
+
+	}
+  
+	// Helmholtz filter
+  if(ii >0 && ii <= 6){
+    radius = radius/1.5^(ii-1);
+  }
+	if(ii <=10){
+	helmholtz;
+	plot(v,  wait = 1, fill = 1, cmm = "phase field after IPOPT");
+	plot(vH, wait = 1, fill = 1, cmm = "filtered phase field");
+
+	v = vH;
+	}
+
+	// Heaviside filter
+	if(ii >=0){
+		real beta = 7.5;
+		v = 0.5 + tanh(beta*(v-0.5))/(2*tanh(0.5*beta));
+	}
+
+	maxsK = 1;
+	ntold = Th.nt;
+
+	// metric computation and mesh adaptation
+	makemetrica(tau);
+
+	real hiso = 10/30.;
+	Vh1 Ind = v > 0.9;
+
+	if(ii >= 0){
+		m11 = m11*(v<=0.9) + 1/hiso^2*(v>0.9);
+		m12 = m12*(v<=0.9);
+		m22 = m22*(v<=0.9) + 1/hiso^2*(v>0.9);
+	}
+
+	Th = adaptmesh(Th, metric = [m11[],m12[],m22[]], nbvx = 12000000, periodic=[[2,y],[4,y],[1,x],[3,x]]);  //ANISO
+	cout << "maxsK = " << maxsK << endl;
+
+	// variables projection
+	v = v;
+	xlb = xlb;
+	xub = xub;
+	gvi = gvi;
+	gvj = 0:Vhp.ndof-1; 
+	lz = lz;
+	uz = uz;
+	m11 = m11;
+	m12 = m12;
+	m22 = m22;
+
+	[u1011,u2011] = [x, 0];
+	[u1022,u2022] = [0, y];
+	[u1012,u2012] = [y, 0];
+
+
+	stopmesh = abs(Th.nt - real(ntold))/ntold;
+	ii += 1;
+	cout << "Iterazione " << ii << ", Errore mesh = " << stopmesh << endl;
+
+	//savevtk("Mix_sol_toll"+tau+"_vf"+vf+"_iter"+(ii-1)+".vtk", Th, v, dataname="Density", order=ffordervel);
+	if(ii >= 6){
+    savevtk("results/Mix_sol_pSigned"+pSigned+"_angledeg"+angledeg+"_E2222min"+E2222min+"_E1122min"+E1122min+"_toll"+tau+"_vf"+vf+"_iter"+(ii-1)+".vtk", Th, v, dataname="Density", order=ffordervel);
+  }
+}
+
+savemesh(Th, "mesh.mesh");
+
+{
+	ofstream file("density.txt");
+	for(int i = 0; i < Vhp.ndof; i++){
+		file << v[][i] << endl;
+	}
+}
+
+cout << "Volume fraction = " << int2d(Th)(v) << endl;
+J(v[]);
+
+cout << Th.nt << endl;
+plot(Th);
+plot(v,  wait = 1, fill = 1, cmm = "phase field after IPOPT, FINAL");
+plot(vH, wait = 1, fill = 1, cmm = "filtered phase field, FINAL");
+
+
+// print final homogenised elasticity tensor C_H -------------
+cout << "====================================================" << endl;
+cout << "FINAL HOMOGENISED ELASTICITY TENSOR  C_H" << endl;
+cout.fixed << "             [ " << E1111 << "   " << E1122 << "  " << E1112 << " ]" << endl;
+cout.fixed << "             [ " << E2211 << "   " << E2222 << "  " << E2212 << " ]" << endl;
+cout.fixed << "             [ " << E1112 << "   " << E2212 << "  " << E1212 << " ]" << endl;
+
+// overhang perimeter ---------------------------------------
+real overhangPerim = int2d(Th)(
+                      HSalpha([bx,by]' * grad(v) / normgrad(v))
+                      * abs([bx,by]' * grad(v))
+                    );
+cout << "Total vertConstraint perimeter = " << overhangPerim << endl;
+
+real volFrac = int2d(Th)(v) / Volume;
+cout << "Final volume fraction = " << volFrac << endl;
+
+real Jopt = J(v[]); // optimum objective value
+cout << "Final objective J    = " << Jopt << endl;
+cout << "====================================================" << endl;
+
+
+// HSalpha indicator field ---------------------------------
+Vh1 HSfield =  HSalpha([bx,by]' * grad(v) /normgrad(v)) * abs([bx,by]' * grad(v));
+
+// visualisation -------------------------------------------
+plot(HSfield, wait = 1, fill = 1,
+     cmm = "HSalpha vertConstraint indicator (1 = vertConstraint, 0 = printable)");
+
+// ave VTK -------------------------------------------------
+savevtk("results/HSalpha_indicator.vtk", Th, HSfield,
+        dataname = "HSalpha", order = ffordervel);
+
+plot(Th);
+plot(v,  wait = 1, fill = 1, cmm = "phase field after IPOPT, FINAL");
+plot(vH, wait = 1, fill = 1, cmm = "filtered phase field, FINAL");
