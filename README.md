@@ -16,7 +16,7 @@ This project implements a numerical framework for the optimization of vascular s
 - **`main.edp`**  
   This is the FreeFem++ code implementing the full optimization loop for unit cell design, including:
   - Computation of the homogenized stiffness tensor via periodic problems;
-  - Evaluation of the cost function
+  - Evaluation of the cost function;
   - Adaptive anisotropic mesh refinement following the microSIMPATY algorithm.
 
 - **`results/`**  
