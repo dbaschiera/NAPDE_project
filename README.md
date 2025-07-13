@@ -9,21 +9,24 @@ This repository contains the code and results for the project developed within t
 
 ## Project Description
 
-This project implements a numerical framework for the optimization of vascular stent unit cells via inverse homogenization coupled with anisotropic mesh adaptation. The core methodology is based on the density-based SIMP formulation and is applied to retrieve microstructures with prescribed mechanical properties at the macroscale, as discussed in the accompanying report.
+This project implements a numerical framework for the inverse homogenization-based topology optimization of vascular stent unit cells, coupled with anisotropic mesh adaptation. The goal is to design stent unit cells that minimize foreshortening during crimping, while satisfying mechanical and geometric constraints. The core methodology is based on the density-based SIMP formulation and is applied to retrieve microstructures with prescribed mechanical properties at the macroscale, as discussed in the accompanying report.
 
 ## Repository Structure
 
 - **`main.edp`**  
-  This is the FreeFem++ code implementing the full optimization loop for unit cell design, including:
-  - Computation of the homogenized stiffness tensor via periodic problems;
-  - Evaluation of the cost function;
-  - Adaptive anisotropic mesh refinement following the microSIMPATY algorithm.
+  This is the FreeFem++ code implementing the full optimization pipeline. It performs the following steps:
+  - Solution of the periodic cell problems to compute the homogenized stiffness tensor;
+  - Evaluation of the objective functional (foreshortening) and enforcement of mechanical and geometric constraints;
+  - Application of Helmholtz filtering and anisotropic mesh adaptation;
+  - Constrained optimization via the *Ipopt* solver.
 
 - **`results/`**  
-  This folder contains `.vtk` files with the optimized density fields and constraint contribution of each part of them.
+  Contains `.vtk` files with:
+  - Optimized density fields;
+  - Contributions to the vertical constraint functional.
 
 - **`Report_Baschiera_Cortinovis.pdf`**  
-  The detailed report describing the formulation, numerical implementation, and results.  
+  The detailed report describing the mathematical formulation, numerical implementation, and results.  
 
 ## References
 
