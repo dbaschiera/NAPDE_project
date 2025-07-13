@@ -14,11 +14,7 @@ This project implements a numerical framework for the inverse homogenization-bas
 ## Repository Structure
 
 - **`main.edp`**  
-  This is the FreeFem++ code implementing the full optimization pipeline. It performs the following steps:
-  - Solution of the periodic cell problems to compute the homogenized stiffness tensor;
-  - Evaluation of the objective functional (foreshortening) and enforcement of mechanical and geometric constraints;
-  - Application of Helmholtz filtering and anisotropic mesh adaptation;
-  - Constrained optimization via the *Ipopt* solver.
+  This is the FreeFem++ code implementing the full optimization pipeline. Refer to the report for the complete algorithm.
 
 - **`results/`**  
   Contains `.vtk` files with:
